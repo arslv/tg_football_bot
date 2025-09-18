@@ -1,5 +1,6 @@
 import asyncio
 import aiosqlite
+import aiohttp
 from datetime import datetime
 from aiogram import Bot
 from database import db
@@ -8,6 +9,73 @@ from database import db
 class NotificationService:
     def __init__(self, bot: Bot):
         self.bot = bot
+
+    async def get_address_from_coordinates(self, latitude: float, longitude: float):
+        """Получение адреса по координатам через OpenStreetMap Nominatim API"""
+        try:
+            url = f"https://nominatim.openstreetmap.org/reverse"
+            params = {
+                'lat': latitude,
+                'lon': longitude,
+                'format': 'json',
+                'accept-language': 'ru',
+                'addressdetails': 1
+            }
+
+            headers = {
+                'User-Agent': 'FootballAcademyBot/1.0'
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params, headers=headers) as response:
+                    if response.status == 200:
+                        data = await response.json()
+
+                        # Формируем читаемый адрес
+                        address_parts = []
+
+                        # Добавляем название улицы и номер дома
+                        if 'address' in data:
+                            addr = data['address']
+
+                            # Улица и номер дома
+                            street_parts = []
+                            if 'house_number' in addr:
+                                street_parts.append(addr['house_number'])
+                            if 'road' in addr:
+                                street_parts.append(addr['road'])
+                            elif 'street' in addr:
+                                street_parts.append(addr['street'])
+
+                            if street_parts:
+                                address_parts.append(' '.join(street_parts))
+
+                            # Район или микрорайон
+                            if 'suburb' in addr:
+                                address_parts.append(addr['suburb'])
+                            elif 'neighbourhood' in addr:
+                                address_parts.append(addr['neighbourhood'])
+
+                            # Город
+                            if 'city' in addr:
+                                address_parts.append(addr['city'])
+                            elif 'town' in addr:
+                                address_parts.append(addr['town'])
+                            elif 'village' in addr:
+                                address_parts.append(addr['village'])
+
+                        if address_parts:
+                            return ', '.join(address_parts)
+                        elif 'display_name' in data:
+                            # Если не удалось разобрать, возвращаем полное название
+                            return data['display_name']
+
+            # Если не удалось получить адрес, возвращаем координаты
+            return f"Координаты: {latitude:.6f}, {longitude:.6f}"
+
+        except Exception as e:
+            print(f"Ошибка получения адреса: {e}")
+            return f"Координаты: {latitude:.6f}, {longitude:.6f}"
 
     async def notify_session_started(self, session_id: int, session_type: str):
         """Уведомление о начале тренировки/игры"""
@@ -43,6 +111,12 @@ class NotificationService:
                 ) as cursor:
                     main_trainers = await cursor.fetchall()
 
+            # Получаем адрес по координатам
+            address = await self.get_address_from_coordinates(
+                session_info['location_lat'],
+                session_info['location_lon']
+            )
+
             # Формируем текст уведомления
             session_text = "Тренировка" if session_type == "training" else "Игра"
             start_time = session_info['start_time']
@@ -54,7 +128,8 @@ class NotificationService:
                 f"📍 Группа: {session_info['group_name']}\n"
                 f"🏢 Филиал: {session_info['branch_name']}\n"
                 f"👨‍🏫 Тренер: {session_info['trainer_name']}\n"
-                f"⏰ Время: {start_time.strftime('%H:%M')}"
+                f"⏰ Время: {start_time.strftime('%H:%M')}\n"
+                f"📍 Адрес: {address}"
             )
 
             # Отправляем родителям
@@ -103,6 +178,12 @@ class NotificationService:
                 ) as cursor:
                     main_trainers = await cursor.fetchall()
 
+            # Получаем адрес по координатам
+            address = await self.get_address_from_coordinates(
+                session_info['location_lat'],
+                session_info['location_lon']
+            )
+
             session_text = "Тренировка" if session_info['type'] == "training" else "Игра"
             start_time = session_info['start_time']
             end_time = session_info['end_time']
@@ -117,7 +198,8 @@ class NotificationService:
                 f"📍 Группа: {session_info['group_name']}\n"
                 f"🏢 Филиал: {session_info['branch_name']}\n"
                 f"👨‍🏫 Тренер: {session_info['trainer_name']}\n"
-                f"⏰ Время: {start_time.strftime('%H:%M')} - {end_time.strftime('%H:%M') if end_time else 'Н/Д'}"
+                f"⏰ Время: {start_time.strftime('%H:%M')} - {end_time.strftime('%H:%M') if end_time else 'Н/Д'}\n"
+                f"📍 Адрес: {address}"
             )
 
             # Отправляем родителям

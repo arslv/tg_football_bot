@@ -1,9 +1,11 @@
 from aiogram import Router, F, Bot
+from config import ROLE_MAIN_TRAINER, ROLE_TRAINER, ROLE_PARENT, ROLE_CASHIER, ADMIN_USER_IDS, format_time, get_current_time
+
 from aiogram.types import Message, CallbackQuery, Location
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.types import InlineKeyboardButton
+from aiogram.types import InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from datetime import datetime
 import re
 import aiosqlite
@@ -34,7 +36,7 @@ async def cmd_start(message: Message, state: FSMContext):
 
     if not user:
         if message.from_user.id in ADMIN_USER_IDS:
-            # Создаем главного тренера
+            # Создаём главного тренера
             user_id = await db.create_user(
                 message.from_user.id,
                 message.from_user.username or "",
@@ -145,16 +147,50 @@ async def start_session_handler(callback: CallbackQuery, state: FSMContext):
 
     session_name = "тренировку" if session_type == "training" else "игру"
 
-    # Создаем inline-кнопки для запроса геолокации
-    keyboard = InlineKeyboardBuilder()
-    keyboard.row(InlineKeyboardButton(text="Назад", callback_data="back_to_menu"))
+    # Создаём reply-клавиатуру с кнопкой геолокации
+    location_keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📍 Отправить геолокацию", request_location=True)],
+            [KeyboardButton(text="❌ Отмена")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
 
     await callback.message.edit_text(
         f"Для начала занятия отправьте вашу геолокацию.\n\n"
         f"Это необходимо для подтверждения того, что вы проводите {session_name}.\n\n"
-        f"Используйте скрепку в поле ввода сообщения и выберите 'Геопозиция'",
-        reply_markup=keyboard.as_markup()
+        f"Нажмите кнопку '📍 Отправить геолокацию' ниже:",
+        reply_markup=InlineKeyboardBuilder().row(
+            InlineKeyboardButton(text="❌ Отмена", callback_data="back_to_menu")
+        ).as_markup()
     )
+
+    # Отправляем отдельное сообщение с кнопками геолокации
+    await callback.message.answer(
+        "Используйте кнопку ниже для отправки геолокации:",
+        reply_markup=location_keyboard
+    )
+
+
+@router.message(F.text == "❌ Отмена", StateFilter(SessionStates.waiting_for_location))
+async def cancel_location_request(message: Message, state: FSMContext):
+    """Отмена запроса геолокации"""
+    await state.clear()
+
+    # Убираем reply-клавиатуру
+    await message.answer(
+        "Операция отменена.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+    # Возвращаемся в меню тренера
+    user = await db.get_user_by_telegram_id(message.from_user.id)
+    if user and user['role'] == ROLE_TRAINER:
+        await message.answer(
+            "Меню тренера:",
+            reply_markup=get_trainer_menu()
+        )
 
 
 @router.message(F.location, StateFilter(SessionStates.waiting_for_location))
@@ -162,6 +198,12 @@ async def process_location(message: Message, state: FSMContext):
     """Обработка геолокации"""
     data = await state.get_data()
     location = message.location
+
+    # Убираем reply-клавиатуру
+    await message.answer(
+        "✅ Геолокация получена!",
+        reply_markup=ReplyKeyboardRemove()
+    )
 
     # Получаем группы тренера
     trainer_id = data['trainer_id']
@@ -187,7 +229,7 @@ async def process_location(message: Message, state: FSMContext):
         await message.answer(
             f"✅ {session_name} началась!\n"
             f"Группа: {group['name']}\n"
-            f"Время: {datetime.now().strftime('%H:%M')}\n\n"
+            f"Время: {format_time(get_current_time())}\n\n"
             f"Теперь проведите перекличку.",
             reply_markup=get_trainer_menu()
         )
@@ -233,7 +275,7 @@ async def select_group(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         f"✅ {session_name} началась!\n"
         f"Группа: {group['name']}\n"
-        f"Время: {datetime.now().strftime('%H:%M')}\n\n"
+        f"Время: {format_time(get_current_time())}\n\n"
         f"Теперь проведите перекличку.",
         reply_markup=get_trainer_menu()
     )
@@ -337,7 +379,7 @@ async def end_session_handler(callback: CallbackQuery):
     session_name = "Тренировка" if active_session['type'] == "training" else "Игра"
     await callback.message.edit_text(
         f"✅ {session_name} завершена!\n"
-        f"Время завершения: {datetime.now().strftime('%H:%M')}",
+        f"Время завершения: {format_time(get_current_time())}",
         reply_markup=get_back_button()
     )
 

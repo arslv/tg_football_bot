@@ -552,3 +552,204 @@ async def view_groups_with_edit(callback: CallbackQuery):
         "👥 Все группы (нажмите для редактирования):",
         reply_markup=keyboard.as_markup()
     )
+
+# Добавьте эти функции в admin_edit_handlers.py
+
+@admin_edit_router.callback_query(F.data.startswith("edit_group_"))
+async def edit_group_start(callback: CallbackQuery, state: FSMContext):
+    """Начало редактирования группы"""
+    group_id = int(callback.data.split("_")[2])
+
+    async with aiosqlite.connect(db.db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+                """SELECT g.*, b.name as branch_name, t.full_name as trainer_name 
+                   FROM groups_table g 
+                   JOIN branches b ON g.branch_id = b.id 
+                   JOIN trainers t ON g.trainer_id = t.id 
+                   WHERE g.id = ?""", (group_id,)
+        ) as cursor:
+            group = await cursor.fetchone()
+
+    if not group:
+        await callback.message.edit_text("Группа не найдена", reply_markup=get_back_button())
+        return
+
+    await state.update_data(
+        editing_group_id=group_id,
+        current_name=group['name'],
+        current_trainer_id=group['trainer_id'],
+        current_branch_id=group['branch_id']
+    )
+    await state.set_state(AdminStates.editing_group_name)
+
+    keyboard = InlineKeyboardBuilder()
+    keyboard.row(InlineKeyboardButton(text="👨‍🏫 Изменить тренера", callback_data="edit_group_trainer_only"))
+    keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data=f"group_info_{group_id}"))
+
+    await callback.message.edit_text(
+        f"✏️ Редактирование группы\n\n"
+        f"Текущее название: {group['name']}\n"
+        f"Текущий тренер: {group['trainer_name']}\n"
+        f"Филиал: {group['branch_name']}\n\n"
+        f"Введите новое название группы или нажмите кнопку для изменения только тренера:",
+        reply_markup=keyboard.as_markup()
+    )
+
+
+@admin_edit_router.message(StateFilter(AdminStates.editing_group_name))
+async def process_edit_group_name(message: Message, state: FSMContext):
+    """Обработка нового названия группы"""
+    new_name = message.text.strip()
+    data = await state.get_data()
+
+    await state.update_data(new_name=new_name)
+    await state.set_state(AdminStates.editing_group_trainer)
+
+    # Получаем тренеров текущего филиала
+    async with aiosqlite.connect(db.db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+                "SELECT id, full_name FROM trainers WHERE branch_id = ? ORDER BY full_name",
+                (data['current_branch_id'],)
+        ) as cursor:
+            trainers = await cursor.fetchall()
+
+    keyboard = InlineKeyboardBuilder()
+    for trainer in trainers:
+        keyboard.row(
+            InlineKeyboardButton(
+                text=f"👨‍🏫 {trainer['full_name']}",
+                callback_data=f"select_edit_group_trainer_{trainer['id']}"
+            )
+        )
+    keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data="back_to_menu"))
+
+    await message.answer(
+        f"✏️ Группа: {new_name}\n\n"
+        f"Выберите нового тренера:",
+        reply_markup=keyboard.as_markup()
+    )
+
+
+@admin_edit_router.callback_query(F.data == "edit_group_trainer_only", StateFilter(AdminStates.editing_group_name))
+async def edit_group_trainer_only(callback: CallbackQuery, state: FSMContext):
+    """Редактирование только тренера группы"""
+    data = await state.get_data()
+    await state.set_state(AdminStates.editing_group_trainer)
+
+    # Получаем тренеров текущего филиала
+    async with aiosqlite.connect(db.db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+                "SELECT id, full_name FROM trainers WHERE branch_id = ? ORDER BY full_name",
+                (data['current_branch_id'],)
+        ) as cursor:
+            trainers = await cursor.fetchall()
+
+    keyboard = InlineKeyboardBuilder()
+    for trainer in trainers:
+        keyboard.row(
+            InlineKeyboardButton(
+                text=f"👨‍🏫 {trainer['full_name']}",
+                callback_data=f"select_edit_group_trainer_{trainer['id']}"
+            )
+        )
+    keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data="back_to_menu"))
+
+    await callback.message.edit_text(
+        f"✏️ Изменение тренера группы\n\n"
+        f"Выберите нового тренера:",
+        reply_markup=keyboard.as_markup()
+    )
+
+
+@admin_edit_router.callback_query(F.data.startswith("select_edit_group_trainer_"),
+                                  StateFilter(AdminStates.editing_group_trainer))
+async def select_edit_group_trainer(callback: CallbackQuery, state: FSMContext):
+    """Выбор нового тренера для группы"""
+    trainer_id = int(callback.data.split("_")[4])
+    data = await state.get_data()
+
+    # Определяем название: новое или старое
+    final_name = data.get('new_name', data['current_name'])
+
+    # Обновляем группу
+    async with aiosqlite.connect(db.db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        await conn.execute(
+            "UPDATE groups_table SET name = ?, trainer_id = ? WHERE id = ?",
+            (final_name, trainer_id, data['editing_group_id'])
+        )
+        await conn.commit()
+
+        async with conn.execute("SELECT full_name FROM trainers WHERE id = ?", (trainer_id,)) as cursor:
+            trainer = await cursor.fetchone()
+
+    await callback.message.edit_text(
+        f"✅ Группа обновлена!\n\n"
+        f"👥 Название: {final_name}\n"
+        f"👨‍🏫 Тренер: {trainer['full_name']}",
+        reply_markup=get_main_trainer_menu()
+    )
+
+    await state.clear()
+
+
+@admin_edit_router.callback_query(F.data.startswith("delete_group_"))
+async def delete_group_confirm(callback: CallbackQuery):
+    """Подтверждение удаления группы"""
+    group_id = int(callback.data.split("_")[2])
+
+    async with aiosqlite.connect(db.db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("SELECT name FROM groups_table WHERE id = ?", (group_id,)) as cursor:
+            group = await cursor.fetchone()
+
+        # Проверяем связанные данные
+        async with conn.execute("SELECT COUNT(*) FROM children WHERE group_id = ?", (group_id,)) as cursor:
+            children_count = (await cursor.fetchone())[0]
+
+        async with conn.execute("SELECT COUNT(*) FROM sessions WHERE group_id = ?", (group_id,)) as cursor:
+            sessions_count = (await cursor.fetchone())[0]
+
+    if not group:
+        await callback.message.edit_text("Группа не найдена", reply_markup=get_back_button())
+        return
+
+    keyboard = InlineKeyboardBuilder()
+    keyboard.row(
+        InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_delete_group_{group_id}"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data=f"group_info_{group_id}")
+    )
+
+    warning = ""
+    if children_count > 0 or sessions_count > 0:
+        warning = f"\n\n⚠️ ВНИМАНИЕ! Это также удалит:\n• Детей: {children_count}\n• Записей о сессиях: {sessions_count}"
+
+    await callback.message.edit_text(
+        f"🗑 Удаление группы\n\n"
+        f"Вы уверены, что хотите удалить группу '{group['name']}'?{warning}\n\n"
+        f"❗ Это действие нельзя отменить!",
+        reply_markup=keyboard.as_markup()
+    )
+
+
+@admin_edit_router.callback_query(F.data.startswith("confirm_delete_group_"))
+async def confirm_delete_group(callback: CallbackQuery):
+    """Подтверждённое удаление группы"""
+    group_id = int(callback.data.split("_")[3])
+
+    async with aiosqlite.connect(db.db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("SELECT name FROM groups_table WHERE id = ?", (group_id,)) as cursor:
+            group = await cursor.fetchone()
+
+        if group:
+            await conn.execute("DELETE FROM groups_table WHERE id = ?", (group_id,))
+            await conn.commit()
+
+    await callback.message.edit_text(
+        f"✅ Группа '{group['name']}' успешно удалена!",
+        reply_markup=get_main_trainer_menu()
+    )

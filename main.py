@@ -7,13 +7,13 @@ from config import BOT_TOKEN
 from database import db
 from handlers import router, set_notification_service
 from admin_handlers import admin_router
-from admin_edit_handlers import admin_edit_router  # НОВЫЙ РОУТЕР
+from admin_edit_handlers import admin_edit_router  # НОВЫЙ РОУТЕР ДЛЯ РЕДАКТИРОВАНИЯ
 from registration_handlers import registration_router
 from notifications import NotificationService
 from daily_reports import schedule_daily_reports
 from cashier_handlers import cashier_router
 from parent_handlers import parent_router
-from parent_edit_handlers import parent_edit_router  # НОВЫЙ РОУТЕР
+from parent_edit_handlers import parent_edit_router  # РОУТЕР ДЛЯ РЕДАКТИРОВАНИЯ РОДИТЕЛЯМИ
 from payment_handlers import payment_router
 from reports_handlers import reports_router
 from unknown_hanlders import unknown_router
@@ -52,11 +52,11 @@ async def main():
     set_notification_service(notification_service)
 
     # Регистрируем роутеры (ВАЖЕН ПОРЯДОК!)
-    dp.include_router(admin_edit_router)  # НОВЫЙ: Редактирование админских сущностей
+    dp.include_router(admin_edit_router)  # ПЕРВЫМ - редактирование админских сущностей
     dp.include_router(admin_router)  # Основные админские обработчики
     dp.include_router(registration_router)  # Регистрационные обработчики
     dp.include_router(cashier_router)  # Обработчики кассира
-    dp.include_router(parent_edit_router)  # НОВЫЙ: Редактирование родителями
+    dp.include_router(parent_edit_router)  # Редактирование родителями
     dp.include_router(parent_router)  # Основные обработчики родителей
     dp.include_router(payment_router)  # Обработчики оплат
     dp.include_router(reports_router)  # Обработчики отчетов
@@ -67,7 +67,7 @@ async def main():
     asyncio.create_task(schedule_daily_reports(bot))
 
     try:
-        logger.info("🚀 Бот запущен на SQLite с функциями редактирования")
+        logger.info("🚀 Бот запущен с полной функциональностью редактирования!")
         await dp.start_polling(bot)
     except KeyboardInterrupt:
         logger.info("🛑 Остановка бота...")

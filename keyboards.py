@@ -158,10 +158,10 @@ def get_trainers_keyboard(trainers):
 def get_amount_keyboard():
     """Клавиатура для ввода суммы"""
     keyboard = InlineKeyboardBuilder()
-    amounts = [1000, 2000, 3000, 5000, 10000]
+    amounts = [100000, 150000, 200000, 250000]  # Новые суммы
     for amount in amounts:
         keyboard.row(
-            InlineKeyboardButton(text=f"{amount} руб", callback_data=f"amount_{amount}")
+            InlineKeyboardButton(text=f"{amount:,} руб".replace(',', ' '), callback_data=f"amount_{amount}")
         )
     keyboard.row(
         InlineKeyboardButton(text="✏️ Другая сумма", callback_data="custom_amount"),

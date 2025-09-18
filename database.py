@@ -1,7 +1,7 @@
 import aiosqlite
 import asyncio
 from datetime import datetime
-from config import DB_PATH
+from config import DB_PATH, get_current_time
 
 
 class Database:
@@ -287,10 +287,11 @@ class Database:
     async def create_session(self, session_type: str, trainer_id: int, group_id: int, location_lat: float, location_lon: float):
         """Создание сессии (тренировки/игры)"""
         async with aiosqlite.connect(self.db_path) as conn:
+            current_time = get_current_time()
             cursor = await conn.execute(
                 """INSERT INTO sessions (type, trainer_id, group_id, start_time, location_lat, location_lon) 
                    VALUES (?, ?, ?, ?, ?, ?)""",
-                (session_type, trainer_id, group_id, datetime.now().isoformat(), location_lat, location_lon)
+                (session_type, trainer_id, group_id, current_time.isoformat(), location_lat, location_lon)
             )
             await conn.commit()
             return cursor.lastrowid
@@ -298,9 +299,10 @@ class Database:
     async def end_session(self, session_id: int):
         """Завершение сессии"""
         async with aiosqlite.connect(self.db_path) as conn:
+            current_time = get_current_time()
             await conn.execute(
                 "UPDATE sessions SET end_time = ?, status = 'completed' WHERE id = ?",
-                (datetime.now().isoformat(), session_id)
+                (current_time.isoformat(), session_id)
             )
             await conn.commit()
 
@@ -340,9 +342,10 @@ class Database:
     async def create_payment(self, child_id: int, trainer_id: int, amount: float, month_year: str):
         """Создание платежа"""
         async with aiosqlite.connect(self.db_path) as conn:
+            current_time = get_current_time()
             cursor = await conn.execute(
-                "INSERT INTO payments (child_id, trainer_id, amount, month_year) VALUES (?, ?, ?, ?)",
-                (child_id, trainer_id, amount, month_year)
+                "INSERT INTO payments (child_id, trainer_id, amount, month_year, payment_date) VALUES (?, ?, ?, ?, ?)",
+                (child_id, trainer_id, amount, month_year, current_time.isoformat())
             )
             await conn.commit()
             return cursor.lastrowid
@@ -365,9 +368,10 @@ class Database:
     async def move_payments_to_cashbox(self, trainer_id: int):
         """Перевод платежей в кассу"""
         async with aiosqlite.connect(self.db_path) as conn:
+            current_time = get_current_time()
             await conn.execute(
                 "UPDATE payments SET status = 'in_cashbox', cashbox_date = ? WHERE trainer_id = ? AND status = 'with_trainer'",
-                (datetime.now().isoformat(), trainer_id)
+                (current_time.isoformat(), trainer_id)
             )
             await conn.commit()
 
@@ -388,9 +392,10 @@ class Database:
     async def add_log(self, user_id: int, action: str, details: str = None):
         """Добавление лога"""
         async with aiosqlite.connect(self.db_path) as conn:
+            current_time = get_current_time()
             await conn.execute(
-                "INSERT INTO logs (user_id, action, details) VALUES (?, ?, ?)",
-                (user_id, action, details)
+                "INSERT INTO logs (user_id, action, details, created_at) VALUES (?, ?, ?, ?)",
+                (user_id, action, details, current_time.isoformat())
             )
             await conn.commit()
 
