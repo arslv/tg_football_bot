@@ -108,7 +108,7 @@ async def select_amount(callback: CallbackQuery, state: FSMContext):
 
     await callback.message.edit_text(
         f"👶 Ребёнок: {data['child_name']}\n"
-        f"💰 Сумма: {amount} руб.\n\n"
+        f"💰 Сумма: {amount} сум\n\n"
         f"📅 За какой месяц оплата?",
         reply_markup=get_month_keyboard()
     )
@@ -143,7 +143,7 @@ async def process_custom_amount(message: Message, state: FSMContext):
 
     await message.answer(
         f"👶 Ребёнок: {data['child_name']}\n"
-        f"💰 Сумма: {amount:.0f} руб.\n\n"
+        f"💰 Сумма: {amount:.0f} сум\n\n"
         f"📅 За какой месяц оплата?",
         reply_markup=get_month_keyboard()
     )
@@ -177,7 +177,7 @@ async def select_month(callback: CallbackQuery, state: FSMContext):
         f"💰 Подтверждение оплаты\n\n"
         f"👶 Ребёнок: {data['child_name']}\n"
         f"👥 Группа: {data['group_name']}\n"
-        f"💵 Сумма: {data['amount']:.0f} руб.\n"
+        f"💵 Сумма: {data['amount']:.0f} сум\n"
         f"📅 За период: {month_name} {year}\n\n"
         f"Подтвердите получение оплаты:",
         reply_markup=keyboard.as_markup()
@@ -224,7 +224,7 @@ async def confirm_payment(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         f"✅ Оплата зафиксирована!\n\n"
         f"👶 Ребёнок: {data['child_name']}\n"
-        f"💰 Сумма: {data['amount']:.0f} руб.\n"
+        f"💰 Сумма: {data['amount']:.0f} сум\n"
         f"📅 За период: {month_name} {year}\n"
         f"🕐 Время: {date.today().strftime('%d.%m.%Y')}\n\n"
         f"Родители получили уведомление об оплате.",
@@ -266,12 +266,12 @@ async def to_cashbox_handler(callback: CallbackQuery):
     )
 
     text = f"💵 Сдача денег в кассу\n\n"
-    text += f"💰 Общая сумма: {total_amount:.0f} руб.\n"
+    text += f"💰 Общая сумма: {total_amount:.0f} сум\n"
     text += f"📋 Платежей: {len(payments)}\n\n"
     text += f"Детали:\n"
 
     for payment in payments[:5]:  # Показываем только первые 5
-        text += f"• {payment['child_name']}: {payment['amount']:.0f} руб.\n"
+        text += f"• {payment['child_name']}: {payment['amount']:.0f} сум\n"
 
     if len(payments) > 5:
         text += f"• ... и ещё {len(payments) - 5}\n"
@@ -310,7 +310,7 @@ async def confirm_cashbox(callback: CallbackQuery):
 
     await callback.message.edit_text(
         f"✅ Деньги сданы в кассу!\n\n"
-        f"💰 Сумма: {total_amount:.0f} руб.\n"
+        f"💰 Сумма: {total_amount:.0f} сум\n"
         f"📅 Дата: {date.today().strftime('%d.%m.%Y')}\n\n"
         f"Администратор получил уведомление.",
         reply_markup=get_trainer_menu()

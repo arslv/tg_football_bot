@@ -65,7 +65,7 @@ async def report_week(callback: CallbackQuery):
         text += f"   Всего занятий: {total_sessions}\n"
         text += f"   🏃 Тренировки: {training_count}\n"
         text += f"   ⚽ Игры: {game_count}\n"
-        text += f"   💰 Получено денег: {week_payments:.0f} руб.\n"
+        text += f"   💰 Получено денег: {week_payments:.0f} сум\n"
         text += f"   📈 Средняя посещаемость: {avg_attendance}%\n\n"
 
         text += "📋 Последние занятия:\n"
@@ -146,7 +146,7 @@ async def report_month(callback: CallbackQuery):
             type_name = "🏃 Тренировки" if session_type['type'] == 'training' else "⚽ Игры"
             text += f"   {type_name}: {session_type[1]}\n"
 
-        text += f"   💰 Доходы: {month_income:.0f} руб.\n\n"
+        text += f"   💰 Доходы: {month_income:.0f} сум\n\n"
 
         text += "🏢 Статистика по филиалам:\n"
         for branch in branch_stats:
@@ -227,22 +227,22 @@ async def report_finance(callback: CallbackQuery):
     text = f"💰 Подробный финансовый отчёт\n\n"
 
     text += f"💎 Общий баланс:\n"
-    text += f"   У тренеров: {money_with_trainers:.0f} руб.\n"
-    text += f"   В кассе: {money_in_cashbox:.0f} руб.\n"
-    text += f"   Всего: {money_with_trainers + money_in_cashbox:.0f} руб.\n\n"
+    text += f"   У тренеров: {money_with_trainers:.0f} сум\n"
+    text += f"   В кассе: {money_in_cashbox:.0f} сум\n"
+    text += f"   Всего: {money_with_trainers + money_in_cashbox:.0f} сум\n\n"
 
     if monthly_income:
         text += "📅 Доходы по месяцам:\n"
         for month_data in monthly_income:
             year, month = month_data['month_year'].split('-')
             month_name = months_ru.get(month, month)
-            text += f"   {month_name} {year}: {month_data['total']:.0f} руб.\n"
+            text += f"   {month_name} {year}: {month_data['total']:.0f} сум\n"
         text += "\n"
 
     if trainer_finance:
         text += "👨‍🏫 Статистика по тренерам:\n"
         for trainer in trainer_finance[:5]:  # Топ 5
-            text += f"   {trainer['full_name']}: {trainer['total']:.0f} руб. "
+            text += f"   {trainer['full_name']}: {trainer['total']:.0f} сум "
             if trainer['with_trainer'] > 0:
                 text += f"(у тренера: {trainer['with_trainer']:.0f})\n"
             else:
@@ -251,6 +251,6 @@ async def report_finance(callback: CallbackQuery):
     if top_payers:
         text += "\n🏆 Топ плательщики:\n"
         for i, payer in enumerate(top_payers[:5], 1):
-            text += f"   {i}. {payer['full_name']}: {payer['total_paid']:.0f} руб.\n"
+            text += f"   {i}. {payer['full_name']}: {payer['total_paid']:.0f} сум\n"
 
     await callback.message.edit_text(text, reply_markup=get_back_button())

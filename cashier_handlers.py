@@ -45,7 +45,7 @@ async def accept_money_handler(callback: CallbackQuery):
     for trainer_name, summary in trainers_summary.items():
         keyboard.row(
             InlineKeyboardButton(
-                text=f"💰 {trainer_name} ({summary['total_amount']:.0f} руб.)",
+                text=f"💰 {trainer_name} ({summary['total_amount']:.0f} сум)",
                 callback_data=f"accept_from_trainer_{summary['trainer_id']}"
             )
         )
@@ -86,7 +86,7 @@ async def accept_from_trainer(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         f"💰 Подтвердить получение денег?\n\n"
         f"👨‍🏫 Тренер: {trainer_name}\n"
-        f"💵 Сумма: {total_amount:.0f} руб.\n"
+        f"💵 Сумма: {total_amount:.0f} сум\n"
         f"📋 Платежей: {len(payments)}",
         reply_markup=keyboard.as_markup()
     )
@@ -109,7 +109,7 @@ async def confirm_money_receipt(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         f"✅ Деньги приняты!\n\n"
         f"👨‍🏫 Тренер: {data['trainer_name']}\n"
-        f"💰 Сумма: {data['total_amount']:.0f} руб.\n"
+        f"💰 Сумма: {data['total_amount']:.0f} сум\n"
         f"📅 Время: {date.today().strftime('%d.%m.%Y')}",
         reply_markup=get_cashier_menu()
     )
@@ -144,17 +144,17 @@ async def pending_payments_handler(callback: CallbackQuery):
 
     for trainer_name, summary in trainers_summary.items():
         text += f"👨‍🏫 {trainer_name}\n"
-        text += f"   💵 {summary['total']:.0f} руб. ({summary['count']} платежей)\n"
+        text += f"   💵 {summary['total']:.0f} сум ({summary['count']} платежей)\n"
 
         # Показываем детали по каждому платежу
         for payment in summary['payments'][:3]:  # Показываем только первые 3
-            text += f"   • {payment['child_name']}: {payment['amount']:.0f} руб.\n"
+            text += f"   • {payment['child_name']}: {payment['amount']:.0f} сум\n"
         if len(summary['payments']) > 3:
             text += f"   • ... и ещё {len(summary['payments']) - 3}\n"
         text += "\n"
         total_all += summary['total']
 
-    text += f"💎 Общая сумма: {total_all:.0f} руб."
+    text += f"💎 Общая сумма: {total_all:.0f} сум"
 
     await callback.message.edit_text(text, reply_markup=get_back_button())
 
@@ -204,13 +204,13 @@ async def financial_report_handler(callback: CallbackQuery):
 
     text = (
         f"📊 Финансовый отчёт\n\n"
-        f"💰 Всего в кассе: {total_in_cashbox:.0f} руб.\n"
-        f"👨‍🏫 У тренеров: {total_with_trainers:.0f} руб.\n"
-        f"💎 Общая сумма: {total_in_cashbox + total_with_trainers:.0f} руб.\n\n"
+        f"💰 Всего в кассе: {total_in_cashbox:.0f} сум\n"
+        f"👨‍🏫 У тренеров: {total_with_trainers:.0f} сум\n"
+        f"💎 Общая сумма: {total_in_cashbox + total_with_trainers:.0f} сум\n\n"
         f"📅 Поступления:\n"
-        f"   Сегодня: {today_cashbox:.0f} руб.\n"
-        f"   За неделю: {week_cashbox:.0f} руб.\n"
-        f"   За месяц: {month_cashbox:.0f} руб."
+        f"   Сегодня: {today_cashbox:.0f} сум\n"
+        f"   За неделю: {week_cashbox:.0f} сум\n"
+        f"   За месяц: {month_cashbox:.0f} сум"
     )
 
     await callback.message.edit_text(text, reply_markup=get_back_button())

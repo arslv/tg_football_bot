@@ -534,7 +534,7 @@ async def report_today(callback: CallbackQuery):
     text += f"📊 Всего занятий: {len(sessions)}\n"
     text += f"🏃 Тренировки: {sum(1 for s in sessions if s['type'] == 'training')}\n"
     text += f"⚽ Игры: {sum(1 for s in sessions if s['type'] == 'game')}\n"
-    text += f"💰 Получено денег: {payments_today:.0f} руб.\n\n"
+    text += f"💰 Получено денег: {payments_today:.0f} сум\n\n"
 
     text += "📋 Занятия:\n"
     for session in sessions:
@@ -548,11 +548,12 @@ async def report_today(callback: CallbackQuery):
     await callback.message.edit_text(text, reply_markup=get_back_button())
 
 
-# Добавьте эту функцию в admin_handlers.py
-
+# Добавляем функцию для просмотра детей с возможностью редактирования ТОЛЬКО для главного тренера
 @admin_router.callback_query(F.data == "view_children")
 async def view_children_with_edit(callback: CallbackQuery):
-    """Просмотр всех детей с возможностью редактирования"""
+    """Просмотр всех детей с возможностью редактирования (только для главного тренера)"""
+    user = await db.get_user_by_telegram_id(callback.from_user.id)
+
     async with aiosqlite.connect(db.db_path) as conn:
         conn.row_factory = aiosqlite.Row
         async with conn.execute(
@@ -575,25 +576,40 @@ async def view_children_with_edit(callback: CallbackQuery):
         return
 
     keyboard = InlineKeyboardBuilder()
+
+    # Проверяем, является ли пользователь главным тренером
+    is_main_trainer = user and user['role'] == ROLE_MAIN_TRAINER
+
     for child in children:
-        keyboard.row(
-            InlineKeyboardButton(
-                text=f"👶 {child['full_name']} ({child['group_name']}, {child['branch_name']})",
-                callback_data=f"child_info_{child['id']}"
+        if is_main_trainer:
+            # Для главного тренера - показываем с возможностью редактирования
+            keyboard.row(
+                InlineKeyboardButton(
+                    text=f"👶 {child['full_name']} ({child['group_name']}, {child['branch_name']})",
+                    callback_data=f"child_info_{child['id']}"
+                )
             )
-        )
+        else:
+            # Для остальных - только информация без возможности редактирования
+            text_info = f"👶 {child['full_name']} - {child['group_name']} ({child['branch_name']}, тренер: {child['trainer_name']})"
+            keyboard.row(
+                InlineKeyboardButton(
+                    text=text_info,
+                    callback_data=f"child_info_readonly_{child['id']}"
+                )
+            )
+
     keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data="mt_groups"))
 
-    await callback.message.edit_text(
-        "👶 Все дети (нажмите для просмотра/редактирования):",
-        reply_markup=keyboard.as_markup()
-    )
+    title = "👶 Все дети" + (" (нажмите для редактирования)" if is_main_trainer else " (только просмотр)")
+    await callback.message.edit_text(title, reply_markup=keyboard.as_markup())
 
 
-@admin_router.callback_query(F.data.startswith("child_info_"))
-async def child_info_with_actions(callback: CallbackQuery):
-    """Информация о ребёнке с кнопками редактирования"""
-    child_id = int(callback.data.split("_")[2])
+# Функция для read-only просмотра информации о ребёнке
+@admin_router.callback_query(F.data.startswith("child_info_readonly_"))
+async def child_info_readonly(callback: CallbackQuery):
+    """Информация о ребёнке без возможности редактирования"""
+    child_id = int(callback.data.split("_")[3])
 
     async with aiosqlite.connect(db.db_path) as conn:
         conn.row_factory = aiosqlite.Row
@@ -609,41 +625,9 @@ async def child_info_with_actions(callback: CallbackQuery):
         ) as cursor:
             child = await cursor.fetchone()
 
-        # Получаем статистику посещаемости
-        from datetime import date, timedelta
-        month_ago = date.today() - timedelta(days=30)
-
-        async with conn.execute(
-                """SELECT 
-                       COUNT(*) as total_sessions,
-                       SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) as present_count
-                   FROM attendance a
-                   JOIN sessions s ON a.session_id = s.id
-                   WHERE a.child_id = ? AND DATE(s.start_time) >= ?""", (child_id, month_ago.isoformat())
-        ) as cursor:
-            stats = await cursor.fetchone()
-
-        # Получаем информацию о платежах
-        async with conn.execute(
-                """SELECT 
-                       COUNT(*) as total_payments,
-                       SUM(amount) as total_amount,
-                       SUM(CASE WHEN status = 'in_cashbox' THEN amount ELSE 0 END) as paid_amount
-                   FROM payments WHERE child_id = ?""", (child_id,)
-        ) as cursor:
-            payment_stats = await cursor.fetchone()
-
     if not child:
         await callback.message.edit_text("Ребёнок не найден", reply_markup=get_back_button())
         return
-
-    total_sessions = stats['total_sessions'] or 0
-    present_count = stats['present_count'] or 0
-    attendance_rate = (present_count / total_sessions * 100) if total_sessions > 0 else 0
-
-    total_payments = payment_stats['total_payments'] or 0
-    total_amount = payment_stats['total_amount'] or 0
-    paid_amount = payment_stats['paid_amount'] or 0
 
     parent_info = f"{child['parent_name']}"
     if child['parent_username']:
@@ -654,306 +638,10 @@ async def child_info_with_actions(callback: CallbackQuery):
         f"👤 Родитель: {parent_info}\n"
         f"👥 Группа: {child['group_name']}\n"
         f"👨‍🏫 Тренер: {child['trainer_name']}\n"
-        f"🏢 Филиал: {child['branch_name']}\n\n"
-        f"📊 Посещаемость за месяц:\n"
-        f"   Всего занятий: {total_sessions}\n"
-        f"   Посетил: {present_count}\n"
-        f"   Процент: {attendance_rate:.1f}%\n\n"
-        f"💰 Платежи:\n"
-        f"   Всего: {total_amount:.0f} руб. ({total_payments} платежей)\n"
-        f"   Сдано в кассу: {paid_amount:.0f} руб."
+        f"🏢 Филиал: {child['branch_name']}"
     )
 
     keyboard = InlineKeyboardBuilder()
-    keyboard.row(
-        InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"edit_child_{child_id}"),
-        InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_child_{child_id}")
-    )
     keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data="view_children"))
 
     await callback.message.edit_text(text, reply_markup=keyboard.as_markup())
-
-
-# НАЙДИТЕ в admin_handlers.py функцию edit_child_start и ЗАМЕНИТЕ её на эту:
-
-# НАЙДИТЕ в admin_handlers.py функцию edit_child_start и ЗАМЕНИТЕ её на эту:
-
-# НАЙДИТЕ в admin_handlers.py функцию edit_child_start и ЗАМЕНИТЕ её на эту:
-
-@admin_router.callback_query(F.data.startswith("edit_child_") & ~F.data.contains("parent") & ~F.data.contains("group"))
-async def edit_child_start(callback: CallbackQuery, state: FSMContext):
-    """Начало редактирования ребёнка"""
-    child_id = int(callback.data.split("_")[2])
-
-    async with aiosqlite.connect(db.db_path) as conn:
-        conn.row_factory = aiosqlite.Row
-        async with conn.execute(
-                """SELECT c.*, g.name as group_name, u.first_name || ' ' || u.last_name as parent_name
-                   FROM children c 
-                   JOIN groups_table g ON c.group_id = g.id 
-                   JOIN users u ON c.parent_id = u.id
-                   WHERE c.id = ?""", (child_id,)
-        ) as cursor:
-            child = await cursor.fetchone()
-
-    if not child:
-        await callback.message.edit_text("Ребёнок не найден", reply_markup=get_back_button())
-        return
-
-    await state.update_data(
-        editing_child_id=child_id,
-        current_name=child['full_name'],
-        current_parent_id=child['parent_id'],
-        current_group_id=child['group_id']
-    )
-    await state.set_state(AdminStates.editing_child_name)
-
-    keyboard = InlineKeyboardBuilder()
-    keyboard.row(InlineKeyboardButton(text="👤 Изменить родителя", callback_data="edit_child_parent_only"))
-    keyboard.row(InlineKeyboardButton(text="👥 Изменить группу", callback_data="edit_child_group_only"))
-    keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data=f"child_info_{child_id}"))
-
-    await callback.message.edit_text(
-        f"✏️ Редактирование ребёнка\n\n"
-        f"Текущее имя: {child['full_name']}\n"
-        f"Текущий родитель: {child['parent_name']}\n"
-        f"Текущая группа: {child['group_name']}\n\n"
-        f"Введите новое полное имя ребёнка или нажмите кнопку для изменения родителя/группы:",
-        reply_markup=keyboard.as_markup()
-    )
-
-
-# ДОБАВЬТЕ эти две новые функции ПОСЛЕ функции edit_child_start:
-
-@admin_router.callback_query(F.data == "edit_child_parent_only", StateFilter(AdminStates.editing_child_name))
-async def edit_child_parent_only(callback: CallbackQuery, state: FSMContext):
-    """Редактирование только родителя ребёнка"""
-    # Получаем всех родителей
-    async with aiosqlite.connect(db.db_path) as conn:
-        conn.row_factory = aiosqlite.Row
-        async with conn.execute(
-                "SELECT * FROM users WHERE role = 'parent' ORDER BY first_name, last_name",
-        ) as cursor:
-            parents = await cursor.fetchall()
-
-    if not parents:
-        await callback.message.edit_text(
-            "❌ В системе нет зарегистрированных родителей!",
-            reply_markup=get_back_button()
-        )
-        return
-
-    await state.set_state(AdminStates.editing_child_parent)
-
-    keyboard = InlineKeyboardBuilder()
-    for parent in parents:
-        parent_name = f"{parent['first_name']} {parent['last_name']}"
-        if parent['username']:
-            parent_name += f" (@{parent['username']})"
-        keyboard.row(
-            InlineKeyboardButton(
-                text=f"👤 {parent_name}",
-                callback_data=f"select_edit_child_parent_{parent['id']}"
-            )
-        )
-    keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data="back_to_menu"))
-
-    await callback.message.edit_text(
-        f"✏️ Изменение родителя ребёнка\n\n"
-        f"Выберите нового родителя:",
-        reply_markup=keyboard.as_markup()
-    )
-
-
-@admin_router.callback_query(F.data == "edit_child_group_only", StateFilter(AdminStates.editing_child_name))
-async def edit_child_group_only(callback: CallbackQuery, state: FSMContext):
-    """Редактирование только группы ребёнка"""
-    # Получаем все группы
-    async with aiosqlite.connect(db.db_path) as conn:
-        conn.row_factory = aiosqlite.Row
-        async with conn.execute(
-                """SELECT g.*, b.name as branch_name, t.full_name as trainer_name
-                   FROM groups_table g 
-                   JOIN branches b ON g.branch_id = b.id
-                   JOIN trainers t ON g.trainer_id = t.id
-                   ORDER BY b.name, g.name"""
-        ) as cursor:
-            groups = await cursor.fetchall()
-
-    if not groups:
-        await callback.message.edit_text(
-            "❌ В системе нет групп!",
-            reply_markup=get_back_button()
-        )
-        return
-
-    await state.set_state(AdminStates.editing_child_group)
-
-    keyboard = InlineKeyboardBuilder()
-    for group in groups:
-        keyboard.row(
-            InlineKeyboardButton(
-                text=f"👥 {group['name']} ({group['branch_name']} - {group['trainer_name']})",
-                callback_data=f"select_edit_child_group_{group['id']}"
-            )
-        )
-    keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data="back_to_menu"))
-
-    await callback.message.edit_text(
-        f"✏️ Изменение группы ребёнка\n\n"
-        f"Выберите новую группу:",
-        reply_markup=keyboard.as_markup()
-    )
-
-
-@admin_router.message(StateFilter(AdminStates.editing_child_name))
-async def process_edit_child_name(message: Message, state: FSMContext):
-    """Обработка нового имени ребёнка"""
-    new_name = message.text.strip()
-    data = await state.get_data()
-
-    # Обновляем только имя ребёнка
-    async with aiosqlite.connect(db.db_path) as conn:
-        await conn.execute(
-            "UPDATE children SET full_name = ? WHERE id = ?",
-            (new_name, data['editing_child_id'])
-        )
-        await conn.commit()
-
-    await message.answer(
-        f"✅ Имя ребёнка обновлено!\n\n"
-        f"👶 Новое имя: {new_name}",
-        reply_markup=get_main_trainer_menu()
-    )
-
-    await state.clear()
-
-
-@admin_router.callback_query(F.data.startswith("delete_child_"))
-async def delete_child_confirm(callback: CallbackQuery):
-    """Подтверждение удаления ребёнка"""
-    child_id = int(callback.data.split("_")[2])
-
-    async with aiosqlite.connect(db.db_path) as conn:
-        conn.row_factory = aiosqlite.Row
-        async with conn.execute(
-                """SELECT c.full_name, g.name as group_name
-                   FROM children c
-                   JOIN groups_table g ON c.group_id = g.id
-                   WHERE c.id = ?""", (child_id,)
-        ) as cursor:
-            child = await cursor.fetchone()
-
-        # Проверяем связанные данные
-        async with conn.execute("SELECT COUNT(*) FROM attendance WHERE child_id = ?", (child_id,)) as cursor:
-            attendance_count = (await cursor.fetchone())[0]
-
-        async with conn.execute("SELECT COUNT(*) FROM payments WHERE child_id = ?", (child_id,)) as cursor:
-            payments_count = (await cursor.fetchone())[0]
-
-    if not child:
-        await callback.message.edit_text("Ребёнок не найден", reply_markup=get_back_button())
-        return
-
-    keyboard = InlineKeyboardBuilder()
-    keyboard.row(
-        InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_delete_child_{child_id}"),
-        InlineKeyboardButton(text="❌ Отмена", callback_data=f"child_info_{child_id}")
-    )
-
-    warning = ""
-    if attendance_count > 0 or payments_count > 0:
-        warning = f"\n\n⚠️ ВНИМАНИЕ! Это также удалит всю историю:\n• Записей посещаемости: {attendance_count}\n• Записей об оплатах: {payments_count}"
-
-    await callback.message.edit_text(
-        f"🗑 Удаление ребёнка\n\n"
-        f"Вы уверены, что хотите удалить ребёнка '{child['full_name']}'?\n"
-        f"Группа: {child['group_name']}{warning}\n\n"
-        f"❗ Это действие нельзя отменить!",
-        reply_markup=keyboard.as_markup()
-    )
-
-@admin_router.callback_query(F.data.startswith("confirm_delete_child_"))
-async def confirm_delete_child(callback: CallbackQuery):
-    """Подтверждённое удаление ребёнка"""
-    child_id = int(callback.data.split("_")[3])
-
-    async with aiosqlite.connect(db.db_path) as conn:
-        conn.row_factory = aiosqlite.Row
-        async with conn.execute("SELECT full_name FROM children WHERE id = ?", (child_id,)) as cursor:
-            child = await cursor.fetchone()
-
-        if child:
-            await conn.execute("DELETE FROM children WHERE id = ?", (child_id,))
-            await conn.commit()
-
-    await callback.message.edit_text(
-        f"✅ Ребёнок '{child['full_name']}' удален из системы.",
-        reply_markup=get_main_trainer_menu()
-    )
-
-# ДОБАВЬТЕ эти функции в КОНЕЦ файла admin_handlers.py:
-
-@admin_router.callback_query(F.data.startswith("select_edit_child_parent_"), StateFilter(AdminStates.editing_child_parent))
-async def select_edit_child_parent(callback: CallbackQuery, state: FSMContext):
-    """Выбор нового родителя для ребёнка"""
-    parent_id = int(callback.data.split("_")[4])
-    data = await state.get_data()
-
-    # Определяем имя: новое или старое
-    final_name = data.get('new_name', data['current_name'])
-
-    # Обновляем ребёнка
-    async with aiosqlite.connect(db.db_path) as conn:
-        conn.row_factory = aiosqlite.Row
-        await conn.execute(
-            "UPDATE children SET full_name = ?, parent_id = ? WHERE id = ?",
-            (final_name, parent_id, data['editing_child_id'])
-        )
-        await conn.commit()
-
-        async with conn.execute(
-                "SELECT first_name || ' ' || last_name as parent_name FROM users WHERE id = ?",
-                (parent_id,)
-        ) as cursor:
-            parent = await cursor.fetchone()
-
-    await callback.message.edit_text(
-        f"✅ Ребёнок обновлен!\n\n"
-        f"👶 Имя: {final_name}\n"
-        f"👤 Новый родитель: {parent['parent_name']}",
-        reply_markup=get_main_trainer_menu()
-    )
-
-    await state.clear()
-
-
-@admin_router.callback_query(F.data.startswith("select_edit_child_group_"), StateFilter(AdminStates.editing_child_group))
-async def select_edit_child_group(callback: CallbackQuery, state: FSMContext):
-    """Выбор новой группы для ребёнка"""
-    group_id = int(callback.data.split("_")[4])
-    data = await state.get_data()
-
-    # Определяем имя: новое или старое
-    final_name = data.get('new_name', data['current_name'])
-
-    # Обновляем ребёнка
-    async with aiosqlite.connect(db.db_path) as conn:
-        conn.row_factory = aiosqlite.Row
-        await conn.execute(
-            "UPDATE children SET full_name = ?, group_id = ? WHERE id = ?",
-            (final_name, group_id, data['editing_child_id'])
-        )
-        await conn.commit()
-
-        async with conn.execute("SELECT name FROM groups_table WHERE id = ?", (group_id,)) as cursor:
-            group = await cursor.fetchone()
-
-    await callback.message.edit_text(
-        f"✅ Ребёнок обновлен!\n\n"
-        f"👶 Имя: {final_name}\n"
-        f"👥 Новая группа: {group['name']}",
-        reply_markup=get_main_trainer_menu()
-    )
-
-    await state.clear()

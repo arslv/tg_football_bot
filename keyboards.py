@@ -156,17 +156,36 @@ def get_trainers_keyboard(trainers):
 
 
 def get_amount_keyboard():
-    """Клавиатура для ввода суммы"""
+    """Клавиатура для выбора суммы оплаты"""
     keyboard = InlineKeyboardBuilder()
-    amounts = [100000, 150000, 200000, 250000]  # Новые суммы
-    for amount in amounts:
-        keyboard.row(
-            InlineKeyboardButton(text=f"{amount:,} руб".replace(',', ' '), callback_data=f"amount_{amount}")
-        )
+
+    # Стандартные суммы в сумах
+    amounts = [100000, 150000, 200000, 250000]
+
+    # Создаем кнопки по две в ряд
+    for i in range(0, len(amounts), 2):
+        row_buttons = []
+        for j in range(2):
+            if i + j < len(amounts):
+                amount = amounts[i + j]
+                row_buttons.append(
+                    InlineKeyboardButton(
+                        text=f"{amount:,} сум".replace(',', ' '),  # Форматирование с пробелами
+                        callback_data=f"amount_{amount}"
+                    )
+                )
+        keyboard.row(*row_buttons)
+
+    # Кнопка для ввода произвольной суммы
     keyboard.row(
-        InlineKeyboardButton(text="✏️ Другая сумма", callback_data="custom_amount"),
-        InlineKeyboardButton(text="❌ Отмена", callback_data="back_to_menu")
+        InlineKeyboardButton(text="✏️ Ввести другую сумму", callback_data="custom_amount")
     )
+
+    # Кнопка "Назад"
+    keyboard.row(
+        InlineKeyboardButton(text="⬅ Назад", callback_data="back_to_menu")
+    )
+
     return keyboard.as_markup()
 
 

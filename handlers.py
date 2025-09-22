@@ -471,8 +471,8 @@ async def trainer_statistics(callback: CallbackQuery):
         f"👶 Всего детей: {total_children}\n"
         f"📈 Средняя посещаемость: {avg_attendance}%\n\n"
         f"💰 Финансы:\n"
-        f"   У меня: {money_with_trainer:.0f} руб.\n"
-        f"   Собрано за месяц: {month_income:.0f} руб."
+        f"   У меня: {money_with_trainer:.0f} сум\n"
+        f"   Собрано за месяц: {month_income:.0f} сум"
     )
 
     await callback.message.edit_text(text, reply_markup=get_back_button())
@@ -580,10 +580,10 @@ async def main_trainer_finance(callback: CallbackQuery):
 
     text = (
         f"💰 Финансовая сводка\n\n"
-        f"💵 У тренеров: {money_with_trainers:.0f} руб.\n"
-        f"🏦 В кассе: {money_in_cashbox:.0f} руб.\n"
-        f"💎 Общая сумма: {money_with_trainers + money_in_cashbox:.0f} руб.\n\n"
-        f"📅 Доходы за месяц: {month_income:.0f} руб.\n"
+        f"💵 У тренеров: {money_with_trainers:.0f} сум\n"
+        f"🏦 В кассе: {money_in_cashbox:.0f} сум\n"
+        f"💎 Общая сумма: {money_with_trainers + money_in_cashbox:.0f} сум\n\n"
+        f"📅 Доходы за месяц: {month_income:.0f} сум\n"
         f"📋 Платежей за месяц: {month_payments_count}"
     )
 

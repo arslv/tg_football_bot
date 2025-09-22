@@ -15,12 +15,20 @@ from states import AdminStates
 admin_edit_router = Router()
 
 
+# Функция для проверки прав главного тренера
+async def is_main_trainer(telegram_id: int) -> bool:
+    """Проверка, является ли пользователь главным тренером"""
+    user = await db.get_user_by_telegram_id(telegram_id)
+    return user and user['role'] == ROLE_MAIN_TRAINER
+
+
 # РЕДАКТИРОВАНИЕ И УДАЛЕНИЕ ФИЛИАЛОВ
 
 @admin_edit_router.callback_query(F.data.startswith("branch_info_"))
 async def branch_info_with_actions(callback: CallbackQuery):
     """Информация о филиале с кнопками редактирования"""
     branch_id = int(callback.data.split("_")[2])
+    is_main = await is_main_trainer(callback.from_user.id)
 
     async with aiosqlite.connect(db.db_path) as conn:
         conn.row_factory = aiosqlite.Row
@@ -56,15 +64,176 @@ async def branch_info_with_actions(callback: CallbackQuery):
     )
 
     keyboard = InlineKeyboardBuilder()
-    keyboard.row(
-        InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"edit_branch_{branch_id}"),
-        InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_branch_{branch_id}")
-    )
+
+    # Кнопка редактирования доступна всем
+    keyboard.row(InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"edit_branch_{branch_id}"))
+
+    # Кнопка удаления только для главного тренера
+    if is_main:
+        keyboard.row(InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_branch_{branch_id}"))
+
     keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data="mt_branches"))
 
     await callback.message.edit_text(text, reply_markup=keyboard.as_markup())
 
 
+# РЕДАКТИРОВАНИЕ И УДАЛЕНИЕ ТРЕНЕРОВ
+
+@admin_edit_router.callback_query(F.data.startswith("trainer_info_"))
+async def trainer_info_with_actions(callback: CallbackQuery):
+    """Информация о тренере с кнопками редактирования"""
+    trainer_id = int(callback.data.split("_")[2])
+    is_main = await is_main_trainer(callback.from_user.id)
+
+    async with aiosqlite.connect(db.db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+
+        async with conn.execute(
+                """SELECT t.*, b.name as branch_name, u.first_name, u.last_name, u.username
+                   FROM trainers t 
+                   JOIN branches b ON t.branch_id = b.id 
+                   LEFT JOIN users u ON t.user_id = u.id 
+                   WHERE t.id = ?""", (trainer_id,)
+        ) as cursor:
+            trainer = await cursor.fetchone()
+
+        async with conn.execute("SELECT name FROM groups_table WHERE trainer_id = ?", (trainer_id,)) as cursor:
+            groups = await cursor.fetchall()
+
+        async with conn.execute(
+                """SELECT COUNT(*) FROM children c 
+                   JOIN groups_table g ON c.group_id = g.id 
+                   WHERE g.trainer_id = ?""", (trainer_id,)
+        ) as cursor:
+            children_count = (await cursor.fetchone())[0]
+
+    if not trainer:
+        await callback.message.edit_text("Тренер не найден", reply_markup=get_back_button())
+        return
+
+    groups_text = "\n".join([f"• {g['name']}" for g in groups]) or "Нет групп"
+    telegram_info = "✅ Подключён" if trainer['user_id'] else "❌ Не подключён"
+
+    text = (
+        f"👨‍🏫 {trainer['full_name']}\n\n"
+        f"🏢 Филиал: {trainer['branch_name']}\n"
+        f"📱 Telegram: {telegram_info}\n"
+        f"👥 Групп: {len(groups)}\n"
+        f"👶 Детей: {children_count}\n\n"
+        f"📋 Группы:\n{groups_text}"
+    )
+
+    keyboard = InlineKeyboardBuilder()
+
+    # Кнопка редактирования доступна всем
+    keyboard.row(InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"edit_trainer_{trainer_id}"))
+
+    # Кнопка удаления только для главного тренера
+    if is_main:
+        keyboard.row(InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_trainer_{trainer_id}"))
+
+    keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data="mt_trainers"))
+
+    await callback.message.edit_text(text, reply_markup=keyboard.as_markup())
+
+
+# РЕДАКТИРОВАНИЕ И УДАЛЕНИЕ ГРУПП
+
+@admin_edit_router.callback_query(F.data.startswith("group_info_"))
+async def group_info_with_actions(callback: CallbackQuery):
+    """Информация о группе с кнопками редактирования"""
+    group_id = int(callback.data.split("_")[2])
+    is_main = await is_main_trainer(callback.from_user.id)
+
+    async with aiosqlite.connect(db.db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+                """SELECT g.*, b.name as branch_name, t.full_name as trainer_name,
+                          COUNT(c.id) as children_count
+                   FROM groups_table g 
+                   JOIN branches b ON g.branch_id = b.id 
+                   JOIN trainers t ON g.trainer_id = t.id 
+                   LEFT JOIN children c ON g.id = c.group_id
+                   WHERE g.id = ?
+                   GROUP BY g.id""", (group_id,)
+        ) as cursor:
+            group = await cursor.fetchone()
+
+        async with conn.execute(
+                "SELECT full_name FROM children WHERE group_id = ? ORDER BY full_name", (group_id,)
+        ) as cursor:
+            children = await cursor.fetchall()
+
+    if not group:
+        await callback.message.edit_text("Группа не найдена", reply_markup=get_back_button())
+        return
+
+    children_text = "\n".join([f"• {c['full_name']}" for c in children]) or "Нет детей"
+
+    text = (
+        f"👥 {group['name']}\n\n"
+        f"🏢 Филиал: {group['branch_name']}\n"
+        f"👨‍🏫 Тренер: {group['trainer_name']}\n"
+        f"👶 Детей: {group['children_count']}\n\n"
+        f"📋 Список детей:\n{children_text}"
+    )
+
+    keyboard = InlineKeyboardBuilder()
+
+    # Кнопка редактирования доступна всем
+    keyboard.row(InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"edit_group_{group_id}"))
+
+    # Кнопка удаления только для главного тренера
+    if is_main:
+        keyboard.row(InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_group_{group_id}"))
+
+    keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data="view_groups"))
+
+    await callback.message.edit_text(text, reply_markup=keyboard.as_markup())
+
+
+# Добавляем обработчик для просмотра групп с возможностью редактирования
+@admin_edit_router.callback_query(F.data == "view_groups")
+async def view_groups_with_edit(callback: CallbackQuery):
+    """Просмотр всех групп с возможностью редактирования"""
+    async with aiosqlite.connect(db.db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+                """SELECT g.*, b.name as branch_name, t.full_name as trainer_name,
+                          COUNT(c.id) as children_count
+                   FROM groups_table g 
+                   JOIN branches b ON g.branch_id = b.id 
+                   JOIN trainers t ON g.trainer_id = t.id 
+                   LEFT JOIN children c ON g.id = c.group_id
+                   GROUP BY g.id, b.name, t.full_name
+                   ORDER BY b.name, g.name"""
+        ) as cursor:
+            groups = await cursor.fetchall()
+
+    if not groups:
+        await callback.message.edit_text(
+            "❌ Групп пока нет.",
+            reply_markup=get_back_button()
+        )
+        return
+
+    keyboard = InlineKeyboardBuilder()
+    for group in groups:
+        keyboard.row(
+            InlineKeyboardButton(
+                text=f"👥 {group['name']} ({group['branch_name']}, {group['children_count']} детей)",
+                callback_data=f"group_info_{group['id']}"
+            )
+        )
+    keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data="mt_groups"))
+
+    await callback.message.edit_text(
+        "👥 Все группы (нажмите для редактирования):",
+        reply_markup=keyboard.as_markup()
+    )
+
+
+# РЕДАКТИРОВАНИЕ ФИЛИАЛОВ
 @admin_edit_router.callback_query(F.data.startswith("edit_branch_"))
 async def edit_branch_start(callback: CallbackQuery, state: FSMContext):
     """Начало редактирования филиала"""
@@ -83,7 +252,7 @@ async def edit_branch_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.editing_branch_name)
 
     keyboard = InlineKeyboardBuilder()
-    keyboard.row(InlineKeyboardButton(text="📝 Изменить адрес", callback_data="edit_branch_address_only"))
+    keyboard.row(InlineKeyboardButton(text="📍 Изменить адрес", callback_data="edit_branch_address_only"))
     keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data=f"branch_info_{branch_id}"))
 
     await callback.message.edit_text(
@@ -154,119 +323,7 @@ async def process_edit_branch_address(message: Message, state: FSMContext):
     await state.clear()
 
 
-@admin_edit_router.callback_query(F.data.startswith("delete_branch_"))
-async def delete_branch_confirm(callback: CallbackQuery):
-    """Подтверждение удаления филиала"""
-    branch_id = int(callback.data.split("_")[2])
-
-    async with aiosqlite.connect(db.db_path) as conn:
-        conn.row_factory = aiosqlite.Row
-        async with conn.execute("SELECT name FROM branches WHERE id = ?", (branch_id,)) as cursor:
-            branch = await cursor.fetchone()
-
-        # Проверяем связанные данные
-        async with conn.execute("SELECT COUNT(*) FROM trainers WHERE branch_id = ?", (branch_id,)) as cursor:
-            trainers_count = (await cursor.fetchone())[0]
-
-        async with conn.execute("SELECT COUNT(*) FROM groups_table WHERE branch_id = ?", (branch_id,)) as cursor:
-            groups_count = (await cursor.fetchone())[0]
-
-    if not branch:
-        await callback.message.edit_text("Филиал не найден", reply_markup=get_back_button())
-        return
-
-    keyboard = InlineKeyboardBuilder()
-    keyboard.row(
-        InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_delete_branch_{branch_id}"),
-        InlineKeyboardButton(text="❌ Отмена", callback_data=f"branch_info_{branch_id}")
-    )
-
-    warning = ""
-    if trainers_count > 0 or groups_count > 0:
-        warning = f"\n\n⚠️ ВНИМАНИЕ! Это также удалит:\n• Тренеров: {trainers_count}\n• Групп: {groups_count}\n• Всех детей в этих группах"
-
-    await callback.message.edit_text(
-        f"🗑 Удаление филиала\n\n"
-        f"Вы уверены, что хотите удалить филиал '{branch['name']}'?{warning}",
-        reply_markup=keyboard.as_markup()
-    )
-
-
-@admin_edit_router.callback_query(F.data.startswith("confirm_delete_branch_"))
-async def confirm_delete_branch(callback: CallbackQuery):
-    """Подтверждённое удаление филиала"""
-    branch_id = int(callback.data.split("_")[3])
-
-    async with aiosqlite.connect(db.db_path) as conn:
-        conn.row_factory = aiosqlite.Row
-        async with conn.execute("SELECT name FROM branches WHERE id = ?", (branch_id,)) as cursor:
-            branch = await cursor.fetchone()
-
-        if branch:
-            await conn.execute("DELETE FROM branches WHERE id = ?", (branch_id,))
-            await conn.commit()
-
-    await callback.message.edit_text(
-        f"✅ Филиал '{branch['name']}' успешно удален!",
-        reply_markup=get_main_trainer_menu()
-    )
-
-
-# РЕДАКТИРОВАНИЕ И УДАЛЕНИЕ ТРЕНЕРОВ
-
-@admin_edit_router.callback_query(F.data.startswith("trainer_info_"))
-async def trainer_info_with_actions(callback: CallbackQuery):
-    """Информация о тренере с кнопками редактирования"""
-    trainer_id = int(callback.data.split("_")[2])
-
-    async with aiosqlite.connect(db.db_path) as conn:
-        conn.row_factory = aiosqlite.Row
-
-        async with conn.execute(
-                """SELECT t.*, b.name as branch_name, u.first_name, u.last_name, u.username
-                   FROM trainers t 
-                   JOIN branches b ON t.branch_id = b.id 
-                   LEFT JOIN users u ON t.user_id = u.id 
-                   WHERE t.id = ?""", (trainer_id,)
-        ) as cursor:
-            trainer = await cursor.fetchone()
-
-        async with conn.execute("SELECT name FROM groups_table WHERE trainer_id = ?", (trainer_id,)) as cursor:
-            groups = await cursor.fetchall()
-
-        async with conn.execute(
-                """SELECT COUNT(*) FROM children c 
-                   JOIN groups_table g ON c.group_id = g.id 
-                   WHERE g.trainer_id = ?""", (trainer_id,)
-        ) as cursor:
-            children_count = (await cursor.fetchone())[0]
-
-    if not trainer:
-        await callback.message.edit_text("Тренер не найден", reply_markup=get_back_button())
-        return
-
-    groups_text = "\n".join([f"• {g['name']}" for g in groups]) or "Нет групп"
-    telegram_info = "✅ Подключён" if trainer['user_id'] else "❌ Не подключён"
-
-    text = (
-        f"👨‍🏫 {trainer['full_name']}\n\n"
-        f"🏢 Филиал: {trainer['branch_name']}\n"
-        f"📱 Telegram: {telegram_info}\n"
-        f"👥 Групп: {len(groups)}\n"
-        f"👶 Детей: {children_count}\n\n"
-        f"📋 Группы:\n{groups_text}"
-    )
-
-    keyboard = InlineKeyboardBuilder()
-    keyboard.row(
-        InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"edit_trainer_{trainer_id}"),
-        InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_trainer_{trainer_id}")
-    )
-    keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data="mt_trainers"))
-
-    await callback.message.edit_text(text, reply_markup=keyboard.as_markup())
-
-
+# РЕДАКТИРОВАНИЕ ТРЕНЕРОВ
 @admin_edit_router.callback_query(F.data.startswith("edit_trainer_"))
 async def edit_trainer_start(callback: CallbackQuery, state: FSMContext):
     """Начало редактирования тренера"""
@@ -281,9 +338,6 @@ async def edit_trainer_start(callback: CallbackQuery, state: FSMContext):
                    WHERE t.id = ?""", (trainer_id,)
         ) as cursor:
             trainer = await cursor.fetchone()
-
-        async with conn.execute("SELECT id, name FROM branches ORDER BY name") as cursor:
-            branches = await cursor.fetchall()
 
     if not trainer:
         await callback.message.edit_text("Тренер не найден", reply_markup=get_back_button())
@@ -401,160 +455,7 @@ async def select_edit_trainer_branch(callback: CallbackQuery, state: FSMContext)
     await state.clear()
 
 
-@admin_edit_router.callback_query(F.data.startswith("delete_trainer_"))
-async def delete_trainer_confirm(callback: CallbackQuery):
-    """Подтверждение удаления тренера"""
-    trainer_id = int(callback.data.split("_")[2])
-
-    async with aiosqlite.connect(db.db_path) as conn:
-        conn.row_factory = aiosqlite.Row
-        async with conn.execute("SELECT full_name FROM trainers WHERE id = ?", (trainer_id,)) as cursor:
-            trainer = await cursor.fetchone()
-
-        # Проверяем связанные данные
-        async with conn.execute("SELECT COUNT(*) FROM groups_table WHERE trainer_id = ?", (trainer_id,)) as cursor:
-            groups_count = (await cursor.fetchone())[0]
-
-        async with conn.execute(
-                """SELECT COUNT(*) FROM children c 
-                   JOIN groups_table g ON c.group_id = g.id 
-                   WHERE g.trainer_id = ?""", (trainer_id,)
-        ) as cursor:
-            children_count = (await cursor.fetchone())[0]
-
-    if not trainer:
-        await callback.message.edit_text("Тренер не найден", reply_markup=get_back_button())
-        return
-
-    keyboard = InlineKeyboardBuilder()
-    keyboard.row(
-        InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_delete_trainer_{trainer_id}"),
-        InlineKeyboardButton(text="❌ Отмена", callback_data=f"trainer_info_{trainer_id}")
-    )
-
-    warning = ""
-    if groups_count > 0 or children_count > 0:
-        warning = f"\n\n⚠️ ВНИМАНИЕ! Это также удалит:\n• Групп: {groups_count}\n• Детей: {children_count}"
-
-    await callback.message.edit_text(
-        f"🗑 Удаление тренера\n\n"
-        f"Вы уверены, что хотите удалить тренера '{trainer['full_name']}'?{warning}",
-        reply_markup=keyboard.as_markup()
-    )
-
-
-@admin_edit_router.callback_query(F.data.startswith("confirm_delete_trainer_"))
-async def confirm_delete_trainer(callback: CallbackQuery):
-    """Подтверждённое удаление тренера"""
-    trainer_id = int(callback.data.split("_")[3])
-
-    async with aiosqlite.connect(db.db_path) as conn:
-        conn.row_factory = aiosqlite.Row
-        async with conn.execute("SELECT full_name FROM trainers WHERE id = ?", (trainer_id,)) as cursor:
-            trainer = await cursor.fetchone()
-
-        if trainer:
-            await conn.execute("DELETE FROM trainers WHERE id = ?", (trainer_id,))
-            await conn.commit()
-
-    await callback.message.edit_text(
-        f"✅ Тренер '{trainer['full_name']}' успешно удален!",
-        reply_markup=get_main_trainer_menu()
-    )
-
-
-# РЕДАКТИРОВАНИЕ И УДАЛЕНИЕ ГРУПП
-
-@admin_edit_router.callback_query(F.data.startswith("group_info_"))
-async def group_info_with_actions(callback: CallbackQuery):
-    """Информация о группе с кнопками редактирования"""
-    group_id = int(callback.data.split("_")[2])
-
-    async with aiosqlite.connect(db.db_path) as conn:
-        conn.row_factory = aiosqlite.Row
-        async with conn.execute(
-                """SELECT g.*, b.name as branch_name, t.full_name as trainer_name,
-                          COUNT(c.id) as children_count
-                   FROM groups_table g 
-                   JOIN branches b ON g.branch_id = b.id 
-                   JOIN trainers t ON g.trainer_id = t.id 
-                   LEFT JOIN children c ON g.id = c.group_id
-                   WHERE g.id = ?
-                   GROUP BY g.id""", (group_id,)
-        ) as cursor:
-            group = await cursor.fetchone()
-
-        async with conn.execute(
-                "SELECT full_name FROM children WHERE group_id = ? ORDER BY full_name", (group_id,)
-        ) as cursor:
-            children = await cursor.fetchall()
-
-    if not group:
-        await callback.message.edit_text("Группа не найдена", reply_markup=get_back_button())
-        return
-
-    children_text = "\n".join([f"• {c['full_name']}" for c in children]) or "Нет детей"
-
-    text = (
-        f"👥 {group['name']}\n\n"
-        f"🏢 Филиал: {group['branch_name']}\n"
-        f"👨‍🏫 Тренер: {group['trainer_name']}\n"
-        f"👶 Детей: {group['children_count']}\n\n"
-        f"📋 Список детей:\n{children_text}"
-    )
-
-    keyboard = InlineKeyboardBuilder()
-    keyboard.row(
-        InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"edit_group_{group_id}"),
-        InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_group_{group_id}")
-    )
-    keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data="view_groups"))
-
-    await callback.message.edit_text(text, reply_markup=keyboard.as_markup())
-
-
-# Добавим обработчик для кнопки "Просмотр групп" с возможностью редактирования
-@admin_edit_router.callback_query(F.data == "view_groups")
-async def view_groups_with_edit(callback: CallbackQuery):
-    """Просмотр всех групп с возможностью редактирования"""
-    async with aiosqlite.connect(db.db_path) as conn:
-        conn.row_factory = aiosqlite.Row
-        async with conn.execute(
-                """SELECT g.*, b.name as branch_name, t.full_name as trainer_name,
-                          COUNT(c.id) as children_count
-                   FROM groups_table g 
-                   JOIN branches b ON g.branch_id = b.id 
-                   JOIN trainers t ON g.trainer_id = t.id 
-                   LEFT JOIN children c ON g.id = c.group_id
-                   GROUP BY g.id, b.name, t.full_name
-                   ORDER BY b.name, g.name"""
-        ) as cursor:
-            groups = await cursor.fetchall()
-
-    if not groups:
-        await callback.message.edit_text(
-            "❌ Групп пока нет.",
-            reply_markup=get_back_button()
-        )
-        return
-
-    keyboard = InlineKeyboardBuilder()
-    for group in groups:
-        keyboard.row(
-            InlineKeyboardButton(
-                text=f"👥 {group['name']} ({group['branch_name']}, {group['children_count']} детей)",
-                callback_data=f"group_info_{group['id']}"
-            )
-        )
-    keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data="mt_groups"))
-
-    await callback.message.edit_text(
-        "👥 Все группы (нажмите для редактирования):",
-        reply_markup=keyboard.as_markup()
-    )
-
-# Добавьте эти функции в admin_edit_handlers.py
-
+# РЕДАКТИРОВАНИЕ ГРУПП
 @admin_edit_router.callback_query(F.data.startswith("edit_group_"))
 async def edit_group_start(callback: CallbackQuery, state: FSMContext):
     """Начало редактирования группы"""
@@ -696,9 +597,145 @@ async def select_edit_group_trainer(callback: CallbackQuery, state: FSMContext):
     await state.clear()
 
 
+# ФУНКЦИИ УДАЛЕНИЯ (ТОЛЬКО ДЛЯ ГЛАВНОГО ТРЕНЕРА)
+
+# Удаление филиала
+@admin_edit_router.callback_query(F.data.startswith("delete_branch_"))
+async def delete_branch_confirm(callback: CallbackQuery):
+    """Подтверждение удаления филиала (только для главного тренера)"""
+    if not await is_main_trainer(callback.from_user.id):
+        await callback.answer("❌ Нет прав на удаление", show_alert=True)
+        return
+
+    branch_id = int(callback.data.split("_")[2])
+
+    async with aiosqlite.connect(db.db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("SELECT name FROM branches WHERE id = ?", (branch_id,)) as cursor:
+            branch = await cursor.fetchone()
+
+        async with conn.execute("SELECT COUNT(*) FROM trainers WHERE branch_id = ?", (branch_id,)) as cursor:
+            trainers_count = (await cursor.fetchone())[0]
+
+        async with conn.execute("SELECT COUNT(*) FROM groups_table WHERE branch_id = ?", (branch_id,)) as cursor:
+            groups_count = (await cursor.fetchone())[0]
+
+    if not branch:
+        await callback.message.edit_text("Филиал не найден", reply_markup=get_back_button())
+        return
+
+    keyboard = InlineKeyboardBuilder()
+    keyboard.row(
+        InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_delete_branch_{branch_id}"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data=f"branch_info_{branch_id}")
+    )
+
+    warning = ""
+    if trainers_count > 0 or groups_count > 0:
+        warning = f"\n\n⚠️ ВНИМАНИЕ! Это также удалит:\n• Тренеров: {trainers_count}\n• Групп: {groups_count}\n• Всех детей в этих группах"
+
+    await callback.message.edit_text(
+        f"🗑 Удаление филиала\n\n"
+        f"Вы уверены, что хотите удалить филиал '{branch['name']}'?{warning}",
+        reply_markup=keyboard.as_markup()
+    )
+
+
+@admin_edit_router.callback_query(F.data.startswith("confirm_delete_branch_"))
+async def confirm_delete_branch(callback: CallbackQuery):
+    """Подтверждённое удаление филиала"""
+    if not await is_main_trainer(callback.from_user.id):
+        await callback.answer("❌ Нет прав на удаление", show_alert=True)
+        return
+
+    branch_id = int(callback.data.split("_")[3])
+
+    async with aiosqlite.connect(db.db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("SELECT name FROM branches WHERE id = ?", (branch_id,)) as cursor:
+            branch = await cursor.fetchone()
+
+        if branch:
+            await conn.execute("DELETE FROM branches WHERE id = ?", (branch_id,))
+            await conn.commit()
+
+    await callback.message.edit_text(
+        f"✅ Филиал '{branch['name']}' успешно удален!",
+        reply_markup=get_main_trainer_menu()
+    )
+
+
+# Удаление тренера
+@admin_edit_router.callback_query(F.data.startswith("delete_trainer_"))
+async def delete_trainer_confirm(callback: CallbackQuery):
+    """Подтверждение удаления тренера (только для главного тренера)"""
+    if not await is_main_trainer(callback.from_user.id):
+        await callback.answer("❌ Нет прав на удаление", show_alert=True)
+        return
+
+    trainer_id = int(callback.data.split("_")[2])
+
+    async with aiosqlite.connect(db.db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("SELECT full_name FROM trainers WHERE id = ?", (trainer_id,)) as cursor:
+            trainer = await cursor.fetchone()
+
+        async with conn.execute("SELECT COUNT(*) FROM groups_table WHERE trainer_id = ?", (trainer_id,)) as cursor:
+            groups_count = (await cursor.fetchone())[0]
+
+    if not trainer:
+        await callback.message.edit_text("Тренер не найден", reply_markup=get_back_button())
+        return
+
+    keyboard = InlineKeyboardBuilder()
+    keyboard.row(
+        InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_delete_trainer_{trainer_id}"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data=f"trainer_info_{trainer_id}")
+    )
+
+    warning = ""
+    if groups_count > 0:
+        warning = f"\n\n⚠️ ВНИМАНИЕ! Это также удалит:\n• Групп: {groups_count}\n• Всех детей в этих группах"
+
+    await callback.message.edit_text(
+        f"🗑 Удаление тренера\n\n"
+        f"Вы уверены, что хотите удалить тренера '{trainer['full_name']}'?{warning}",
+        reply_markup=keyboard.as_markup()
+    )
+
+
+@admin_edit_router.callback_query(F.data.startswith("confirm_delete_trainer_"))
+async def confirm_delete_trainer(callback: CallbackQuery):
+    """Подтверждённое удаление тренера"""
+    if not await is_main_trainer(callback.from_user.id):
+        await callback.answer("❌ Нет прав на удаление", show_alert=True)
+        return
+
+    trainer_id = int(callback.data.split("_")[3])
+
+    async with aiosqlite.connect(db.db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("SELECT full_name FROM trainers WHERE id = ?", (trainer_id,)) as cursor:
+            trainer = await cursor.fetchone()
+
+        if trainer:
+            await conn.execute("DELETE FROM trainers WHERE id = ?", (trainer_id,))
+            await conn.commit()
+
+    await callback.message.edit_text(
+        f"✅ Тренер '{trainer['full_name']}' успешно удален!",
+        reply_markup=get_main_trainer_menu()
+    )
+
+
+# Удаление группы
 @admin_edit_router.callback_query(F.data.startswith("delete_group_"))
 async def delete_group_confirm(callback: CallbackQuery):
-    """Подтверждение удаления группы"""
+    """Подтверждение удаления группы (только для главного тренера)"""
+    if not await is_main_trainer(callback.from_user.id):
+        await callback.answer("❌ Нет прав на удаление", show_alert=True)
+        return
+
     group_id = int(callback.data.split("_")[2])
 
     async with aiosqlite.connect(db.db_path) as conn:
@@ -706,7 +743,6 @@ async def delete_group_confirm(callback: CallbackQuery):
         async with conn.execute("SELECT name FROM groups_table WHERE id = ?", (group_id,)) as cursor:
             group = await cursor.fetchone()
 
-        # Проверяем связанные данные
         async with conn.execute("SELECT COUNT(*) FROM children WHERE group_id = ?", (group_id,)) as cursor:
             children_count = (await cursor.fetchone())[0]
 
@@ -738,6 +774,10 @@ async def delete_group_confirm(callback: CallbackQuery):
 @admin_edit_router.callback_query(F.data.startswith("confirm_delete_group_"))
 async def confirm_delete_group(callback: CallbackQuery):
     """Подтверждённое удаление группы"""
+    if not await is_main_trainer(callback.from_user.id):
+        await callback.answer("❌ Нет прав на удаление", show_alert=True)
+        return
+
     group_id = int(callback.data.split("_")[3])
 
     async with aiosqlite.connect(db.db_path) as conn:
