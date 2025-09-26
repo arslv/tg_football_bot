@@ -41,7 +41,7 @@ class AdminStates(StatesGroup):
     selecting_child_parent = State()
     selecting_child_group = State()
 
-    # СОСТОЯНИЯ ДЛЯ РЕДАКТИРОВАНИЯ
+    # СОСТОЯНИЯ ДЛЯ РЕДАКТИРОВАНИЯ (ТОЛЬКО ДЛЯ ГЛАВНОГО ТРЕНЕРА)
 
     # Редактирование филиала
     editing_branch_name = State()
@@ -51,7 +51,7 @@ class AdminStates(StatesGroup):
     editing_trainer_name = State()
     editing_trainer_branch = State()
 
-    # Редактирование группы  
+    # Редактирование группы
     editing_group_name = State()
     editing_group_trainer = State()
 
@@ -68,4 +68,4 @@ class CashierStates(StatesGroup):
 class ParentStates(StatesGroup):
     requesting_child_name = State()
     requesting_child_age = State()
-    editing_child_name = State()  # СОСТОЯНИЕ ДЛЯ РЕДАКТИРОВАНИЯ ИМЕНИ РЕБЁНКА
+    # editing_child_name = State()  # УДАЛЕНО - родители не редактируют

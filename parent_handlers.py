@@ -15,6 +15,28 @@ from states import ParentStates
 parent_router = Router()
 
 
+@parent_router.callback_query(F.data == "my_children")
+async def my_children_handler(callback: CallbackQuery):
+    """Мои дети - только просмотр"""
+    user = await db.get_user_by_telegram_id(callback.from_user.id)
+    children = await db.get_children_by_parent(user['id'])
+
+    if not children:
+        await callback.message.edit_text(
+            "У вас нет зарегистрированных детей.",
+            reply_markup=get_back_button()
+        )
+        return
+
+    text = "👶 Ваши дети:\n\n"
+    for child in children:
+        text += f"• {child['full_name']}\n"
+        text += f"  👥 Группа: {child['group_name']}\n"
+        text += f"  🏢 Филиал: {child['branch_name']}\n\n"
+
+    await callback.message.edit_text(text, reply_markup=get_back_button())
+
+
 @parent_router.callback_query(F.data == "attendance_history")
 async def attendance_history_handler(callback: CallbackQuery):
     """История посещаемости"""
@@ -228,9 +250,9 @@ async def show_child_payments(callback: CallbackQuery, child_id: int, child_name
         f"💰 История оплат\n\n"
         f"📊 Статистика:\n"
         f"   Всего платежей: {total_payments}\n"
-        f"   Общая сумма: {total_amount:.0f} руб.\n"
-        f"   Сдано в кассу: {paid_amount:.0f} руб.\n"
-        f"   У тренера: {pending_amount:.0f} руб.\n\n"
+        f"   Общая сумма: {total_amount:.0f} сум\n"
+        f"   Сдано в кассу: {paid_amount:.0f} сум\n"
+        f"   У тренера: {pending_amount:.0f} сум\n\n"
         f"📋 Последние платежи:\n"
     )
 
@@ -253,92 +275,8 @@ async def show_child_payments(callback: CallbackQuery, child_id: int, child_name
         status_text = "В кассе" if payment['status'] == 'in_cashbox' else "У тренера"
 
         text += (
-            f"{status_emoji} {payment['amount']:.0f} руб. - {month_name} {year}\n"
+            f"{status_emoji} {payment['amount']:.0f} сум - {month_name} {year}\n"
             f"   {payment_date.strftime('%d.%m.%Y')} - {status_text}\n"
         )
 
     await callback.message.edit_text(text, reply_markup=get_back_button())
-
-
-@parent_router.callback_query(F.data == "add_child_request")
-async def add_child_request_handler(callback: CallbackQuery, state: FSMContext):
-    """Запрос на добавление ребёнка"""
-    await state.set_state(ParentStates.requesting_child_name)
-
-    await callback.message.edit_text(
-        "👶 Запрос на добавление ребёнка\n\n"
-        "Введите полное имя вашего ребёнка:",
-        reply_markup=get_back_button()
-    )
-
-
-@parent_router.message(StateFilter(ParentStates.requesting_child_name))
-async def process_child_request_name(message: Message, state: FSMContext):
-    """Обработка имени ребёнка для запроса"""
-    child_name = message.text.strip()
-    user = await db.get_user_by_telegram_id(message.from_user.id)
-
-    await state.update_data(child_name=child_name, parent_id=user['id'])
-    await state.set_state(ParentStates.requesting_child_age)
-
-    await message.answer(
-        f"👶 Ребёнок: {child_name}\n\n"
-        f"Введите возраст ребёнка:"
-    )
-
-
-@parent_router.message(StateFilter(ParentStates.requesting_child_age))
-async def process_child_request_age(message: Message, state: FSMContext):
-    """Обработка возраста ребёнка"""
-    try:
-        age = int(message.text.strip())
-        if age < 3 or age > 18:
-            await message.answer("❌ Возраст должен быть от 3 до 18 лет. Попробуйте снова:")
-            return
-    except ValueError:
-        await message.answer("❌ Введите корректный возраст (число). Попробуйте снова:")
-        return
-
-    data = await state.get_data()
-    user = await db.get_user_by_telegram_id(message.from_user.id)
-
-    # Создаем лог-запрос для администратора
-    await db.add_log(
-        user['id'],
-        "child_request",
-        f"Родитель {user['first_name']} {user['last_name']} запросил добавление ребёнка: {data['child_name']}, возраст: {age}"
-    )
-
-    # Отправляем уведомление главному тренеру
-    async with aiosqlite.connect(db.db_path) as conn:
-        conn.row_factory = aiosqlite.Row
-        async with conn.execute(
-                "SELECT telegram_id FROM users WHERE role = 'main_trainer' AND is_active = TRUE"
-        ) as cursor:
-            main_trainers = await cursor.fetchall()
-
-    # Отправляем уведомление
-    from handlers import notification_service
-    if main_trainers and notification_service:
-        for trainer in main_trainers:
-            try:
-                await notification_service.bot.send_message(
-                    trainer['telegram_id'],
-                    f"📝 Новый запрос на добавление ребёнка\n\n"
-                    f"👤 Родитель: {user['first_name']} {user['last_name']} (@{user['username'] or 'нет'})\n"
-                    f"👶 Ребёнок: {data['child_name']}\n"
-                    f"🎂 Возраст: {age} лет\n"
-                    f"📱 Telegram ID: {user['telegram_id']}"
-                )
-            except Exception as e:
-                print(f"Ошибка отправки запроса главному тренеру: {e}")
-
-    await message.answer(
-        f"✅ Запрос отправлен!\n\n"
-        f"👶 Ребёнок: {data['child_name']}\n"
-        f"🎂 Возраст: {age} лет\n\n"
-        f"Администратор рассмотрит ваш запрос и добавит ребёнка в соответствующую группу.",
-        reply_markup=get_parent_menu()
-    )
-
-    await state.clear()

@@ -17,7 +17,7 @@ ROLE_TRAINER = "trainer"
 ROLE_PARENT = "parent"
 ROLE_CASHIER = "cashier"
 
-ADMIN_USER_IDS = [6397535545]
+ADMIN_USER_IDS = [67848722]
 
 # Timezone configuration
 TIMEZONE = pytz.timezone('Asia/Tashkent')  # UTC+5

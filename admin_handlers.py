@@ -6,7 +6,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardButton
 import aiosqlite
 from datetime import datetime
-
+from datetime import date, timedelta
 from config import ROLE_MAIN_TRAINER, ROLE_TRAINER, ROLE_PARENT, ROLE_CASHIER
 from database import db
 from keyboards import get_back_button, get_main_trainer_menu
@@ -642,6 +642,136 @@ async def child_info_readonly(callback: CallbackQuery):
     )
 
     keyboard = InlineKeyboardBuilder()
+    keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data="view_children"))
+
+    await callback.message.edit_text(text, reply_markup=keyboard.as_markup())
+
+
+# ДОБАВИТЬ В КОНЕЦ ФАЙЛА admin_handlers.py
+
+@admin_router.callback_query(F.data == "view_children")
+async def view_children_handler(callback: CallbackQuery):
+    """Просмотр всех детей"""
+    user = await db.get_user_by_telegram_id(callback.from_user.id)
+    is_main_trainer = user and user['role'] == ROLE_MAIN_TRAINER
+
+    async with aiosqlite.connect(db.db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+                """SELECT c.*, g.name as group_name, b.name as branch_name
+                   FROM children c 
+                   JOIN groups_table g ON c.group_id = g.id 
+                   JOIN branches b ON g.branch_id = b.id 
+                   ORDER BY b.name, g.name, c.full_name"""
+        ) as cursor:
+            children = await cursor.fetchall()
+
+    if not children:
+        await callback.message.edit_text(
+            "❌ Детей пока нет.",
+            reply_markup=get_back_button()
+        )
+        return
+
+    keyboard = InlineKeyboardBuilder()
+
+    for child in children:
+        keyboard.row(
+            InlineKeyboardButton(
+                text=f"👶 {child['full_name']} ({child['group_name']}, {child['branch_name']})",
+                callback_data=f"child_info_{child['id']}"
+            )
+        )
+
+    keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data="mt_groups"))
+
+    title = "👶 Все дети" + (" (нажмите для редактирования)" if is_main_trainer else " (нажмите для просмотра)")
+    await callback.message.edit_text(title, reply_markup=keyboard.as_markup())
+
+
+@admin_router.callback_query(F.data.startswith("child_info_"))
+async def child_info_with_actions(callback: CallbackQuery):
+    """Информация о ребёнке с кнопками редактирования (только для главного тренера)"""
+    child_id = int(callback.data.split("_")[2])
+    user = await db.get_user_by_telegram_id(callback.from_user.id)
+    is_main = user and user['role'] == ROLE_MAIN_TRAINER
+
+    async with aiosqlite.connect(db.db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+                """SELECT c.*, g.name as group_name, b.name as branch_name, t.full_name as trainer_name,
+                          u.first_name || ' ' || u.last_name as parent_name, u.username as parent_username
+                   FROM children c 
+                   JOIN groups_table g ON c.group_id = g.id 
+                   JOIN branches b ON g.branch_id = b.id 
+                   JOIN trainers t ON g.trainer_id = t.id 
+                   JOIN users u ON c.parent_id = u.id
+                   WHERE c.id = ?""", (child_id,)
+        ) as cursor:
+            child = await cursor.fetchone()
+
+        # Получаем статистику посещаемости
+        from datetime import date, timedelta
+        month_ago = date.today() - timedelta(days=30)
+
+        async with conn.execute(
+                """SELECT 
+                       COUNT(*) as total_sessions,
+                       SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) as present_count
+                   FROM attendance a
+                   JOIN sessions s ON a.session_id = s.id
+                   WHERE a.child_id = ? AND DATE(s.start_time) >= ?""", (child_id, month_ago.isoformat())
+        ) as cursor:
+            stats = await cursor.fetchone()
+
+        # Получаем информацию о платежах
+        async with conn.execute(
+                """SELECT 
+                       COUNT(*) as total_payments,
+                       SUM(amount) as total_amount,
+                       SUM(CASE WHEN status = 'in_cashbox' THEN amount ELSE 0 END) as paid_amount
+                   FROM payments WHERE child_id = ?""", (child_id,)
+        ) as cursor:
+            payment_stats = await cursor.fetchone()
+
+    if not child:
+        await callback.message.edit_text("Ребёнок не найден", reply_markup=get_back_button())
+        return
+
+    total_sessions = stats['total_sessions'] or 0
+    present_count = stats['present_count'] or 0
+    attendance_rate = (present_count / total_sessions * 100) if total_sessions > 0 else 0
+
+    total_payments = payment_stats['total_payments'] or 0
+    total_amount = payment_stats['total_amount'] or 0
+    paid_amount = payment_stats['paid_amount'] or 0
+
+    parent_info = f"{child['parent_name']}"
+    if child['parent_username']:
+        parent_info += f" (@{child['parent_username']})"
+
+    text = (
+        f"👶 {child['full_name']}\n\n"
+        f"👤 Родитель: {parent_info}\n"
+        f"👥 Группа: {child['group_name']}\n"
+        f"👨‍🏫 Тренер: {child['trainer_name']}\n"
+        f"🏢 Филиал: {child['branch_name']}\n\n"
+        f"📊 Посещаемость за месяц:\n"
+        f"   Всего занятий: {total_sessions}\n"
+        f"   Посетил: {present_count}\n"
+        f"   Процент: {attendance_rate:.1f}%\n\n"
+        f"💰 Платежи:\n"
+        f"   Всего: {total_amount:.0f} сум ({total_payments} платежей)\n"
+        f"   Сдано в кассу: {paid_amount:.0f} сум"
+    )
+
+    keyboard = InlineKeyboardBuilder()
+
+    # Кнопки редактирования и удаления только для главного тренера
+    if is_main:
+        keyboard.row(InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"edit_child_{child_id}"))
+        keyboard.row(InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_child_{child_id}"))
+
     keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data="view_children"))
 
     await callback.message.edit_text(text, reply_markup=keyboard.as_markup())

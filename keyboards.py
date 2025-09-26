@@ -217,16 +217,3 @@ def get_session_type_keyboard():
     )
     keyboard.row(InlineKeyboardButton(text="❌ Отмена", callback_data="back_to_menu"))
     return keyboard.as_markup()
-
-def get_parent_menu():
-    """Главное меню для родителя"""
-    keyboard = InlineKeyboardBuilder()
-    keyboard.row(
-        InlineKeyboardButton(text="👶 Мои дети", callback_data="my_children"),
-        InlineKeyboardButton(text="📊 Посещаемость", callback_data="attendance_history")
-    )
-    keyboard.row(
-        InlineKeyboardButton(text="💰 История оплат", callback_data="payment_history"),
-        InlineKeyboardButton(text="➕ Добавить ребёнка", callback_data="add_child_request")
-    )
-    return keyboard.as_markup()
