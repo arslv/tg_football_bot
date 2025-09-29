@@ -7,7 +7,6 @@ load_dotenv()
 
 # Telegram Bot Token
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
 # Database configuration
 DB_PATH = os.getenv("DB_PATH", "football_academy.db")
 
@@ -25,6 +24,7 @@ TIMEZONE = pytz.timezone('Asia/Tashkent')  # UTC+5
 def get_current_time():
     """Получить текущее время в ташкентском часовом поясе"""
     return datetime.now(TIMEZONE)
+
 
 def format_time(dt):
     """Форматировать время для отображения"""
