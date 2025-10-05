@@ -17,14 +17,21 @@ parent_router = Router()
 
 @parent_router.callback_query(F.data == "my_children")
 async def my_children_handler(callback: CallbackQuery):
-    """Мои дети - только просмотр"""
+    """Мои дети с кнопкой добавления"""
     user = await db.get_user_by_telegram_id(callback.from_user.id)
     children = await db.get_children_by_parent(user['id'])
 
     if not children:
+        keyboard = InlineKeyboardBuilder()
+        keyboard.row(
+            InlineKeyboardButton(text="➕ Добавить ребёнка", callback_data="add_child_request")
+        )
+        keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data="back_to_menu"))
+
         await callback.message.edit_text(
-            "У вас нет зарегистрированных детей.",
-            reply_markup=get_back_button()
+            "У вас нет зарегистрированных детей.\n\n"
+            "Вы можете отправить запрос администратору на добавление ребёнка.",
+            reply_markup=keyboard.as_markup()
         )
         return
 
@@ -34,7 +41,76 @@ async def my_children_handler(callback: CallbackQuery):
         text += f"  👥 Группа: {child['group_name']}\n"
         text += f"  🏢 Филиал: {child['branch_name']}\n\n"
 
-    await callback.message.edit_text(text, reply_markup=get_back_button())
+    keyboard = InlineKeyboardBuilder()
+    keyboard.row(
+        InlineKeyboardButton(text="➕ Добавить ребёнка", callback_data="add_child_request")
+    )
+    keyboard.row(InlineKeyboardButton(text="⬅ Назад", callback_data="back_to_menu"))
+
+    await callback.message.edit_text(text, reply_markup=keyboard.as_markup())
+
+
+@parent_router.callback_query(F.data == "add_child_request")
+async def add_child_request_handler(callback: CallbackQuery, state: FSMContext):
+    """Запрос на добавление ребёнка"""
+    await state.set_state(ParentStates.requesting_child_name)
+
+    await callback.message.edit_text(
+        "➕ Запрос на добавление ребёнка\n\n"
+        "Введите полное имя ребёнка:",
+        reply_markup=get_back_button()
+    )
+
+
+@parent_router.message(StateFilter(ParentStates.requesting_child_name))
+async def process_child_name_request(message: Message, state: FSMContext):
+    """Обработка имени ребёнка для запроса"""
+    child_name = message.text.strip()
+    user = await db.get_user_by_telegram_id(message.from_user.id)
+
+    # Отправляем уведомление администраторам (главным тренерам)
+    async with aiosqlite.connect(db.db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+                "SELECT telegram_id FROM users WHERE role = 'main_trainer' AND is_active = TRUE"
+        ) as cursor:
+            main_trainers = await cursor.fetchall()
+
+    parent_name = f"{user['first_name']} {user['last_name']}"
+    username = f"@{user['username']}" if user['username'] else "нет username"
+
+    notification = (
+        f"👶 Запрос на добавление ребёнка\n\n"
+        f"👤 Родитель: {parent_name} ({username})\n"
+        f"👶 Имя ребёнка: {child_name}\n\n"
+        f"Используйте админ-панель для добавления ребёнка в группу."
+    )
+
+    # Отправляем уведомления всем главным тренерам
+    sent_count = 0
+    for trainer in main_trainers:
+        try:
+            await message.bot.send_message(trainer['telegram_id'], notification)
+            sent_count += 1
+        except Exception as e:
+            print(f"Ошибка отправки уведомления главному тренеру {trainer['telegram_id']}: {e}")
+
+    if sent_count > 0:
+        await message.answer(
+            f"✅ Запрос отправлен!\n\n"
+            f"👶 Имя ребёнка: {child_name}\n\n"
+            f"Администратор получил ваш запрос и добавит ребёнка в группу.",
+            reply_markup=get_parent_menu()
+        )
+    else:
+        await message.answer(
+            f"⚠️ Запрос сохранён, но не удалось отправить уведомление администратору.\n\n"
+            f"👶 Имя ребёнка: {child_name}\n\n"
+            f"Пожалуйста, свяжитесь с администратором напрямую.",
+            reply_markup=get_parent_menu()
+        )
+
+    await state.clear()
 
 
 @parent_router.callback_query(F.data == "attendance_history")
